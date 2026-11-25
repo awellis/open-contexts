@@ -92,8 +92,8 @@ xattr -dr com.apple.quarantine "/Applications/OpenContexts.app"
 
 ## Usage
 
-- `⌘Tab`: Open the switcher for all windows. Press `Tab` again or `↓` to move forward; press `⇧Tab` or `↑` to move backward.
-- `Command + backtick`: Open the switcher for windows of the current app.
+- `⌘Tab`: Open the switcher for all windows. Press `Tab` again or `↓` to move forward; press `Command + backtick`, `⇧Tab`, or `↑` to move backward.
+- `Command + backtick`: When the switcher is closed, open it for windows of the current app. When it is already open, move backward; add Shift to move forward.
 - Group mode: With the switcher open, press `←` or `→` to enter the highlighted window’s group. Keep holding the opening modifier. `Tab` and `⇧Tab` cycle within the group, `←` and `→` switch groups, and `⇧←` or `⇧→` returns to all windows. In Settings, choose the default view under General or record a single shortcut for entering and leaving group mode under Shortcuts.
   Turn off **Enable window switcher groups** in General to hide group labels and controls and disable the group mode shortcut. Groups remain available in the sidebar.
 - Search: Open the switcher, hold its modifier, type an app name or window title, then release to switch. Matching ignores case and uses contiguous text. Combine terms with spaces, such as `chr context`. `Backspace` deletes characters; clearing the query restores the list. With no matches, releasing only closes the switcher. Input supports English letters, numbers and symbols (printable ASCII). Chinese names and titles match full toneless pinyin, such as `weixin` or `weix` for 微信; initials such as `wx` and Chinese input are not supported.

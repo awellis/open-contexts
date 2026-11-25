@@ -357,14 +357,19 @@ final class ShortcutController: ObservableObject {
                modifiers == state.heldModifiers.union(groupModeShortcut.modifiers) {
                 return isRepeat ? nil : .toggleGroups
             }
-            if state.searchQuery.isEmpty,
-               allWindowsShortcut.matches(keyCode: keyCode, flags: flags)
-                || currentAppShortcut.matches(keyCode: keyCode, flags: flags) {
-                return state.step(flags.contains(.maskShift) ? -1 : 1)
+            if state.searchQuery.isEmpty {
+                if currentAppShortcut.matches(keyCode: keyCode, flags: flags) {
+                    return state.step(shifted ? 1 : -1)
+                }
+                if allWindowsShortcut.matches(keyCode: keyCode, flags: flags) {
+                    return state.step(shifted ? -1 : 1)
+                }
             }
             switch keyCode {
-            case 48, 50:
-                return state.step(flags.contains(.maskShift) ? -1 : 1)
+            case 48:
+                return state.step(shifted ? -1 : 1)
+            case 50:
+                return state.step(shifted ? 1 : -1)
             case 126:
                 return state.step(-1)
             case 125:
@@ -455,7 +460,8 @@ final class ShortcutController: ObservableObject {
               controller.keyAction(keyCode: 48, flags: [.maskCommand, .maskShift])
                 == .begin(currentAppOnly: false, reverse: true),
               controller.keyAction(keyCode: 48, flags: [.maskCommand, .maskShift]) == .step(-1),
-              controller.keyAction(keyCode: 50, flags: .maskCommand) == .step(1),
+              controller.keyAction(keyCode: 50, flags: .maskCommand) == .step(-1),
+              controller.keyAction(keyCode: 50, flags: [.maskCommand, .maskShift]) == .step(1),
               controller.modifierAction(flags: [.maskCommand, .maskShift]) == nil,
               controller.modifierAction(flags: .maskShift) == .commit,
               controller.keyAction(keyCode: 50, flags: .maskCommand)
