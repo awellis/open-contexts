@@ -70,6 +70,10 @@
 "Move the pointer into the sidebar and away, press its shortcut again or Esc to restore its visibility setting." = "Placez le pointeur dans la barre latérale puis retirez-le, ou appuyez à nouveau sur son raccourci ou sur Échap pour rétablir son mode d’affichage.";
 "Window switcher" = "Sélecteur de fenêtres";
 "Show windows from all desktops" = "Afficher les fenêtres de tous les bureaux";
+"All-desktop order" = "Ordre entre les bureaux";
+"Recent across desktops" = "Récentes sur tous les bureaux";
+"Group by desktop" = "Grouper par bureau";
+"Windows from every desktop follow one recent-use order." = "Les fenêtres de tous les bureaux suivent un même ordre d’utilisation récente.";
 "The current desktop comes first in recent order. Other desktops stay grouped in a stable order." = "Le bureau actuel apparaît en premier, par utilisation récente. Les autres bureaux restent groupés dans un ordre stable.";
 "Desktop %@" = "Bureau %@";
 "Full screen %@" = "Plein écran %@";

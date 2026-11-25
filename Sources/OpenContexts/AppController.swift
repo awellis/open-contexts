@@ -244,8 +244,12 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
             windows.filter { switchingGroupIDs[$0.id] == groupID }
         } ?? windows
         switchingWindowCount = scopedWindows.count
-        switchingResults = WindowSwitcher.filter(scopedWindows, query: searchQuery,
-                                                 allSpaces: settings.showWindowsFromAllDesktops)
+        switchingResults = WindowSwitcher.filter(
+            scopedWindows,
+            query: searchQuery,
+            allSpaces: settings.showWindowsFromAllDesktops,
+            order: settings.allDesktopsWindowOrder
+        )
     }
 
     private var availableSwitcherGroupIDs: [String] {
@@ -442,7 +446,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
             guard targets.contains(id) else { panel.hideSwitcher(); continue }
             let isPresented = panel.isVisible
             panel.update(results: switchingResults, selectedIndex: selectedIndex, resetHover: resetHover || !isPresented,
-                         groupBySpace: settings.showWindowsFromAllDesktops,
+                         groupBySpace: settings.showWindowsFromAllDesktops
+                             && settings.allDesktopsWindowOrder == .groupedByDesktop,
                          query: searchQuery, totalWindowCount: switchingWindowCount, language: settings.language,
                          searchFocused: isSearchSession, scope: scope)
             if !isPresented { panel.present() }

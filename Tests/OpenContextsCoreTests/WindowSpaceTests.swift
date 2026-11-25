@@ -19,6 +19,26 @@ final class WindowSpaceTests: XCTestCase {
                        ["recent", "older"])
     }
 
+    func testRecentOrderSpansEveryDesktop() {
+        let current = WindowSpace(id: 30, index: 3, isCurrent: true)
+        let other = WindowSpace(id: 10, index: 1, isCurrent: false)
+        let windows = [window("recent-other", app: "Zulu", space: other),
+                       window("recent-current", app: "Alpha", space: current),
+                       window("older-other", app: "Alpha", space: other)]
+        XCTAssertEqual(WindowSwitcher.filter(windows, query: "", allSpaces: true, order: .recent)
+            .map(\.window.id), windows.map(\.id))
+    }
+
+    func testRecentOrderUsesSearchScoreThenGlobalRecency() {
+        let current = WindowSpace(id: 30, index: 3, isCurrent: true)
+        let other = WindowSpace(id: 10, index: 1, isCurrent: false)
+        let windows = [window("recent-tie", app: "My Code", space: other),
+                       window("exact", app: "Code", space: current),
+                       window("older-tie", app: "My Code", space: current)]
+        XCTAssertEqual(WindowSwitcher.filter(windows, query: "code", allSpaces: true, order: .recent)
+            .map(\.window.id), ["exact", "recent-tie", "older-tie"])
+    }
+
     func testOtherDesktopsIgnoreRecentOrderAndFollowDesktopIndex() {
         let first = WindowSpace(id: 50, index: 1, isCurrent: false)
         let second = WindowSpace(id: 10, index: 2, isCurrent: false)

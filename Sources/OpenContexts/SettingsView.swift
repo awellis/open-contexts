@@ -2,6 +2,24 @@ import AppKit
 import OpenContextsCore
 import SwiftUI
 
+extension AllDesktopsWindowOrder {
+    func title(_ language: AppLanguage) -> String {
+        switch self {
+        case .recent: L10n.text("Recent across desktops", language: language)
+        case .groupedByDesktop: L10n.text("Group by desktop", language: language)
+        }
+    }
+
+    func caption(_ language: AppLanguage) -> String {
+        switch self {
+        case .recent:
+            L10n.text("Windows from every desktop follow one recent-use order.", language: language)
+        case .groupedByDesktop:
+            L10n.text("The current desktop comes first in recent order. Other desktops stay grouped in a stable order.", language: language)
+        }
+    }
+}
+
 extension SwitcherDisplayMode {
     func title(_ language: AppLanguage) -> String {
         switch self {
@@ -98,6 +116,7 @@ final class AppSettings: ObservableObject {
     @Published private(set) var switcherGroupsEnabled: Bool
     @Published private(set) var startsInGroupMode: Bool
     @Published private(set) var showWindowsFromAllDesktops: Bool
+    @Published private(set) var allDesktopsWindowOrder: AllDesktopsWindowOrder
     @Published private(set) var switcherDisplayMode: SwitcherDisplayMode
 
     private let defaults: UserDefaults
@@ -122,6 +141,9 @@ final class AppSettings: ObservableObject {
         switcherGroupsEnabled = defaults.object(forKey: "switcherGroupsEnabled") as? Bool ?? true
         startsInGroupMode = defaults.bool(forKey: "startsInGroupMode")
         showWindowsFromAllDesktops = defaults.object(forKey: "showWindowsFromAllDesktops") as? Bool ?? false
+        allDesktopsWindowOrder = AllDesktopsWindowOrder(
+            rawValue: defaults.string(forKey: "allDesktopsWindowOrder") ?? ""
+        ) ?? .recent
         switcherDisplayMode = SwitcherDisplayMode(rawValue: defaults.string(forKey: "switcherDisplayMode") ?? "") ?? .allDisplays
         func loadShortcut(_ key: String, fallback: KeyboardShortcut) -> KeyboardShortcut {
             guard let data = defaults.data(forKey: key),
@@ -229,6 +251,11 @@ final class AppSettings: ObservableObject {
         defaults.set(enabled, forKey: "showWindowsFromAllDesktops")
     }
 
+    func setAllDesktopsWindowOrder(_ order: AllDesktopsWindowOrder) {
+        allDesktopsWindowOrder = order
+        defaults.set(order.rawValue, forKey: "allDesktopsWindowOrder")
+    }
+
     func setSwitcherGroupsEnabled(_ enabled: Bool) {
         switcherGroupsEnabled = enabled
         defaults.set(enabled, forKey: "switcherGroupsEnabled")
@@ -329,6 +356,14 @@ final class AppSettings: ObservableObject {
         guard AppSettings(defaults: defaults).switcherGroupsEnabled else { return false }
         initial.resetGroupModeShortcut()
         guard AppSettings(defaults: defaults).groupModeShortcut == nil else { return false }
+        guard initial.allDesktopsWindowOrder == .recent else { return false }
+        for order in AllDesktopsWindowOrder.allCases {
+            initial.setAllDesktopsWindowOrder(order)
+            guard AppSettings(defaults: defaults).allDesktopsWindowOrder == order else { return false }
+        }
+        defaults.set("invalid", forKey: "allDesktopsWindowOrder")
+        guard AppSettings(defaults: defaults).allDesktopsWindowOrder == .recent else { return false }
+        initial.setAllDesktopsWindowOrder(.recent)
         initial.setShowWindowsFromAllDesktops(true)
         guard AppSettings(defaults: defaults).showWindowsFromAllDesktops else { return false }
         initial.setShowWindowsFromAllDesktops(false)
@@ -579,10 +614,25 @@ struct SettingsView: View {
                     Toggle(L10n.text("Show windows from all desktops", language: language), isOn: Binding(
                         get: { settings.showWindowsFromAllDesktops }, set: settings.setShowWindowsFromAllDesktops
                     ))
-                    Text(L10n.text("The current desktop comes first in recent order. Other desktops stay grouped in a stable order.", language: language))
-                        .foregroundStyle(.secondary)
                 }
                 .toggleStyle(.checkbox)
+            }
+            if settings.showWindowsFromAllDesktops {
+                settingsRow("All-desktop order") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Picker(L10n.text("All-desktop order", language: language), selection: Binding(
+                            get: { settings.allDesktopsWindowOrder }, set: settings.setAllDesktopsWindowOrder
+                        )) {
+                            ForEach(AllDesktopsWindowOrder.allCases) { order in
+                                Text(order.title(language)).tag(order)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 240)
+                        Text(settings.allDesktopsWindowOrder.caption(language))
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
             settingsRow("Show switcher on") {
                 VStack(alignment: .leading, spacing: 8) {

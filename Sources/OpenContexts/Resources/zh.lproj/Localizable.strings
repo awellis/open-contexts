@@ -70,6 +70,10 @@
 "Move the pointer into the sidebar and away, press its shortcut again or Esc to restore its visibility setting." = "鼠标移入侧边栏后再移出可恢复原显示模式，也可再次按快捷键或 Esc。";
 "Window switcher" = "窗口切换器";
 "Show windows from all desktops" = "显示所有桌面的窗口";
+"All-desktop order" = "所有桌面的排序";
+"Recent across desktops" = "跨桌面按最近使用排序";
+"Group by desktop" = "按桌面分组";
+"Windows from every desktop follow one recent-use order." = "所有桌面的窗口统一按最近使用顺序排列。";
 "The current desktop comes first in recent order. Other desktops stay grouped in a stable order." = "当前桌面置顶并按最近使用排序，其他桌面分组采用稳定顺序。";
 "Desktop %@" = "桌面 %@";
 "Full screen %@" = "全屏 %@";

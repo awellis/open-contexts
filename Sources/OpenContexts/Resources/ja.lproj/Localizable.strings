@@ -70,6 +70,10 @@
 "Move the pointer into the sidebar and away, press its shortcut again or Esc to restore its visibility setting." = "ポインタをサイドバーに入れてから外すか、もう一度ショートカットまたは Esc を押すと、元の表示設定に戻ります。";
 "Window switcher" = "ウインドウ切替";
 "Show windows from all desktops" = "すべてのデスクトップのウインドウを表示";
+"All-desktop order" = "全デスクトップの順序";
+"Recent across desktops" = "デスクトップをまたいで最近使った順";
+"Group by desktop" = "デスクトップ別にグループ化";
+"Windows from every desktop follow one recent-use order." = "すべてのデスクトップのウインドウを一つの最近使った順で表示します。";
 "The current desktop comes first in recent order. Other desktops stay grouped in a stable order." = "現在のデスクトップを最近使った順で先頭に表示します。他のデスクトップは固定の順序でグループ化します。";
 "Desktop %@" = "デスクトップ %@";
 "Full screen %@" = "フルスクリーン %@";

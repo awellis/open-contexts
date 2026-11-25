@@ -14,9 +14,18 @@ public struct WindowSpace: Equatable, Sendable {
     }
 }
 
+public enum AllDesktopsWindowOrder: String, CaseIterable, Identifiable, Sendable {
+    case recent
+    case groupedByDesktop
+
+    public var id: String { rawValue }
+}
+
 public enum WindowSwitcher {
-    public static func filter(_ windows: [WindowInfo], query: String, allSpaces: Bool) -> [WindowSearch.Match] {
+    public static func filter(_ windows: [WindowInfo], query: String, allSpaces: Bool,
+                              order: AllDesktopsWindowOrder = .groupedByDesktop) -> [WindowSearch.Match] {
         guard allSpaces else { return WindowSearch.filter(windows.filter(\.isOnCurrentSpace), query: query) }
+        guard order == .groupedByDesktop else { return WindowSearch.filter(windows, query: query) }
         let ordered = windows.enumerated().sorted { lhs, rhs in
             let a = lhs.element, b = rhs.element
             if a.isOnCurrentSpace != b.isOnCurrentSpace { return a.isOnCurrentSpace }

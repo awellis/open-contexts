@@ -70,6 +70,10 @@
 "Move the pointer into the sidebar and away, press its shortcut again or Esc to restore its visibility setting." = "Move the pointer into the sidebar and away, press its shortcut again or Esc to restore its visibility setting.";
 "Window switcher" = "Window switcher";
 "Show windows from all desktops" = "Show windows from all desktops";
+"All-desktop order" = "All-desktop order";
+"Recent across desktops" = "Recent across desktops";
+"Group by desktop" = "Group by desktop";
+"Windows from every desktop follow one recent-use order." = "Windows from every desktop follow one recent-use order.";
 "The current desktop comes first in recent order. Other desktops stay grouped in a stable order." = "The current desktop comes first in recent order. Other desktops stay grouped in a stable order.";
 "Desktop %@" = "Desktop %@";
 "Full screen %@" = "Full screen %@";
