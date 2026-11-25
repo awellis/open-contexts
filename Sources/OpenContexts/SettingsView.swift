@@ -88,6 +88,7 @@ final class AppSettings: ObservableObject {
     @Published private(set) var showUngrouped: Bool
     @Published private(set) var showCreateGroup: Bool
     @Published private(set) var language: AppLanguage
+    @Published private(set) var appearance: AppAppearance
     @Published private(set) var allWindowsShortcut: KeyboardShortcut
     @Published private(set) var currentAppShortcut: KeyboardShortcut
     @Published private(set) var sidebarShortcut: KeyboardShortcut?
@@ -141,6 +142,7 @@ final class AppSettings: ObservableObject {
             || sidebar.conflicts(with: conflict ? .currentApp : currentApp)
             ? nil : sidebar
         language = AppLanguage(rawValue: defaults.string(forKey: "language") ?? "") ?? .system
+        appearance = AppAppearance(rawValue: defaults.string(forKey: "appearance") ?? "") ?? .system
         sidebarMode = SidebarVisibilityMode(rawValue: defaults.string(forKey: "sidebarMode") ?? "") ?? .always
         sidebarVerticalAlignment = SidebarVerticalAlignment(
             rawValue: defaults.string(forKey: "sidebarVerticalAlignment") ?? ""
@@ -215,6 +217,11 @@ final class AppSettings: ObservableObject {
     func setLanguage(_ language: AppLanguage) {
         self.language = language
         defaults.set(language.rawValue, forKey: "language")
+    }
+
+    func setAppearance(_ appearance: AppAppearance) {
+        self.appearance = appearance
+        defaults.set(appearance.rawValue, forKey: "appearance")
     }
 
     func setShowWindowsFromAllDesktops(_ enabled: Bool) {
@@ -377,7 +384,18 @@ final class AppSettings: ObservableObject {
         guard AppSettings(defaults: defaults).language == .ja,
               defaults.string(forKey: "language") == "ja" else { return false }
         defaults.set("unsupported", forKey: "language")
-        guard AppSettings(defaults: defaults).language == .system else { return false }
+        guard AppSettings(defaults: defaults).language == .system,
+              AppSettings(defaults: defaults).appearance == .system else { return false }
+        for appearance in AppAppearance.allCases {
+            settings.setAppearance(appearance)
+            guard AppSettings(defaults: defaults).appearance == appearance,
+                  defaults.string(forKey: "appearance") == appearance.rawValue else { return false }
+        }
+        defaults.set("unsupported", forKey: "appearance")
+        guard AppSettings(defaults: defaults).appearance == .system,
+              AppAppearance.system.nsAppearance == nil,
+              AppAppearance.light.nsAppearance?.name == .aqua,
+              AppAppearance.dark.nsAppearance?.name == .darkAqua else { return false }
         let custom = KeyboardShortcut(keyCode: 16, modifiers: [.maskControl, .maskAlternate], keyLabel: "Y")
         guard settings.sidebarShortcut == .sidebar,
               !settings.setShortcut(.sidebar, target: .allWindows),
@@ -596,6 +614,17 @@ struct SettingsView: View {
                     }
                 }
                 .toggleStyle(.checkbox)
+            }
+            settingsRow("Appearance") {
+                Picker(L10n.text("Appearance", language: language), selection: Binding(
+                    get: { settings.appearance }, set: settings.setAppearance
+                )) {
+                    ForEach(AppAppearance.allCases) { appearance in
+                        Text(appearance.title(language)).tag(appearance)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 200)
             }
             settingsRow("Language") {
                 Picker(L10n.text("Language", language: language), selection: Binding(

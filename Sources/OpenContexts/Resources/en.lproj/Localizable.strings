@@ -16,7 +16,10 @@
 "Display" = "Display";
 "Sidebar position" = "Sidebar position";
 "Language" = "Language";
+"Appearance" = "Appearance";
 "System" = "System";
+"Light" = "Light";
+"Dark" = "Dark";
 "All windows" = "All windows";
 "Current app windows" = "Current app windows";
 "Accessibility" = "Accessibility";

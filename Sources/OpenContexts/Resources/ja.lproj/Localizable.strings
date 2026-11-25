@@ -16,7 +16,10 @@
 "Display" = "表示内容";
 "Sidebar position" = "サイドバーの位置";
 "Language" = "言語";
+"Appearance" = "外観";
 "System" = "システムに合わせる";
+"Light" = "ライト";
+"Dark" = "ダーク";
 "All windows" = "すべてのウインドウ";
 "Current app windows" = "現在のアプリのウインドウ";
 "Accessibility" = "アクセシビリティ";

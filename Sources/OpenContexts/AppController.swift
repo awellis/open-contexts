@@ -114,6 +114,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         settings.objectWillChange.sink { [weak self] _ in
             let previousSwitcherDisplayMode = self?.settings.switcherDisplayMode
             DispatchQueue.main.async {
+                self?.applyAppearance()
                 self?.updateSidebars()
                 self?.configureMenuBar()
                 if let self {
@@ -173,10 +174,18 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 onToggleGroups: { [weak self] in self?.toggleSwitcherGroups() }
             )
         }
+        applyAppearance()
         updateSidebars()
         if currentAppOnly != nil {
             showSwitchers()
         }
+    }
+
+    private func applyAppearance() {
+        let appearance = settings.appearance.nsAppearance
+        sidebars.values.forEach { $0.appearance = appearance }
+        switchers.values.forEach { $0.appearance = appearance }
+        settingsWindow?.appearance = appearance
     }
 
     private func updateSidebars() {
@@ -509,6 +518,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
             let window = NSWindow(contentViewController: controller)
             window.title = L10n.text("OpenContexts Settings", language: settings.language)
             window.styleMask = [.titled, .closable]
+            window.appearance = settings.appearance.nsAppearance
             window.isReleasedWhenClosed = false
             window.delegate = self
             window.center()

@@ -16,7 +16,10 @@
 "Display" = "Contenido";
 "Sidebar position" = "Posición de la barra lateral";
 "Language" = "Idioma";
+"Appearance" = "Apariencia";
 "System" = "Sistema";
+"Light" = "Claro";
+"Dark" = "Oscuro";
 "All windows" = "Todas las ventanas";
 "Current app windows" = "Ventanas de la app actual";
 "Accessibility" = "Accesibilidad";

@@ -46,6 +46,7 @@ The window switcher displays windows in most recently used order. You can contin
 | Sidebar shortcut | Press `⌃⌘B` to keep the sidebar open on the screen under the pointer, even when set to Off; move the pointer into the sidebar and away, press again, or press `Esc` to return to its visibility setting. Customize or disable it in Settings → Shortcuts |
 | Window search | Search by app name or window title: hold the switcher modifier, type, then release to switch; matches are highlighted in yellow |
 | Search shortcut | Enable it in Settings → General, then press `⌥Space` to open the switcher ready for typing, filter by name, and press Return to switch. No key needs to be held. Change the shortcut in Settings → Shortcuts |
+| Appearance | Choose System, Light, or Dark in Settings → General; the settings window, sidebar, and window switcher update immediately |
 | Active window highlight | Keeps the current window highlighted in the app bar with the same blue background and white text as the window switcher |
 | Window activation | Attempts to restore minimized or hidden windows when activated |
 | Window information | Displays app icons, window titles, and notification badges readable from the system Dock |
@@ -99,6 +100,7 @@ xattr -dr com.apple.quarantine "/Applications/OpenContexts.app"
 - Search: Open the switcher, hold its modifier, type an app name or window title, then release to switch. Matching ignores case and ranks exact and contiguous matches ahead of fuzzy subsequence, acronym, and typo-tolerant matches. Combine terms with spaces, such as `chr context`. `Backspace` deletes characters; clearing the query restores the list. With no matches, releasing only closes the switcher. Input supports English letters, numbers and symbols (printable ASCII). Chinese names and titles match full toneless pinyin, such as `weixin` or `weix` for 微信; pinyin initials such as `wx` and Chinese input are not supported.
 - `Esc`: Cancel switching. Release a modifier key of the shortcut to activate the selected window (`⌘` by default).
 - Custom shortcuts: Click either shortcut in Settings, then press a combination using Command, Option, or Control and a key. Shift is reserved for reverse switching; Esc cancels recording. Changes take effect immediately and persist after restarting. “Restore defaults” restores `⌘Tab` and `Command + backtick`.
+- Appearance: Choose System, Light, or Dark under Settings → General. The choice applies immediately and persists after restarting; System follows the macOS appearance.
 - `＋` in the sidebar: Create a group.
 - Right-click a group title: Rename or delete the group.
 - Drag a window to move it into a group or change its order; drag a group title to reorder groups.

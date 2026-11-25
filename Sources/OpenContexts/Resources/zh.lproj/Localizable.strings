@@ -16,7 +16,10 @@
 "Display" = "显示内容";
 "Sidebar position" = "应用栏位置";
 "Language" = "语言";
+"Appearance" = "外观";
 "System" = "跟随系统";
+"Light" = "浅色";
+"Dark" = "深色";
 "All windows" = "所有窗口";
 "Current app windows" = "当前应用窗口";
 "Accessibility" = "辅助功能";

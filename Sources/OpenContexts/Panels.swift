@@ -1206,7 +1206,6 @@ final class SwitcherPanel: NSPanel {
         background.material = .popover
         background.blendingMode = .behindWindow
         background.state = .active
-        background.appearance = NSAppearance(named: .aqua)
         background.wantsLayer = true
         background.layer?.cornerRadius = 10
         background.layer?.masksToBounds = true
@@ -2229,7 +2228,8 @@ enum PanelSmokeCheck {
         sidebar.smokeStopHoverPolling()
         let windows = (0..<200).map {
             WindowInfo(id: "smoke-\($0)", appID: "smoke", appName: "Smoke",
-                       title: "Window \($0) " + String(repeating: "Long title ", count: 40),
+                       title: "Window \($0) " + String(repeating: "Long title ", count: 40)
+                           + ($0 == 199 ? "Quasar" : ""),
                        processID: ProcessInfo.processInfo.processIdentifier)
         }
         let groups = [WindowGroup(id: GroupStore.ungroupedID, name: "未分组")]
@@ -2861,7 +2861,7 @@ enum PanelSmokeCheck {
         switcher.smokeMove(to: 0, pointer: switcher.smokeHoverOrigin)
         let reset = selectedIDs.count == 2 && switcher.smokeHighlightedIndices == [initialIndex]
         let originalFrame = switcher.frame
-        let searchQuery = "smoke 199"
+        let searchQuery = "quasar"
         let searchWindows = WindowSearch.filter(switcherWindows, query: searchQuery)
         switcher.update(results: searchWindows, selectedIndex: 0, resetHover: true, query: "  " + searchQuery + "  ",
                         totalWindowCount: switcherWindows.count, language: .zh)
