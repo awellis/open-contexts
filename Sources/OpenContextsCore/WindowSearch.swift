@@ -37,21 +37,128 @@ public enum WindowSearch {
     }
 
     private static func matchText(_ text: String, token: String) -> (score: Int, ranges: [NSRange])? {
-        func isWordStart(_ index: String.Index) -> Bool {
-            guard index != text.startIndex else { return true }
-            let previous = text[text.index(before: index)]
-            return !previous.isLetter && !previous.isNumber
-                || previous.isLowercase && text[index].isUppercase
-        }
-
         if let range = text.range(of: token, options: [.caseInsensitive, .diacriticInsensitive]) {
             let score = range == text.startIndex..<text.endIndex ? 1_000
                 : range.lowerBound == text.startIndex ? 700
-                : isWordStart(range.lowerBound) ? 600 : 500
+                : isWordStart(range.lowerBound, in: text) ? 600 : 500
             return (score, [NSRange(range, in: text)])
         }
 
         return matchPinyin(text, token: token)
+            ?? matchSubsequence(text, token: token)
+            ?? matchTypo(text, token: token)
+    }
+
+    private static func matchSubsequence(_ text: String, token: String) -> (score: Int, ranges: [NSRange])? {
+        let characters = text.indices.map { (index: $0, folded: folded(text[$0])) }
+        let tokenCharacters = token.map(folded)
+        guard tokenCharacters.count >= 2, !characters.isEmpty else { return nil }
+
+        func score(_ positions: [Int]) -> Int {
+            guard let first = positions.first, let last = positions.last else { return Int.min }
+            let indices = positions.map { characters[$0].index }
+            let span = NSRange(indices[0]..<text.index(after: indices[indices.count - 1]), in: text).length
+            let gaps = max(0, span - positions.count)
+            let wordStarts = indices.filter { isWordStart($0, in: text) }.count
+            return 340 + min(80, positions.count * 8)
+                + (wordStarts == positions.count ? 70 : wordStarts * 8)
+                - min(140, gaps * 5) - first / 2 - (characters.count - last) / 20
+        }
+
+        var paths = characters.indices.filter { characters[$0].folded == tokenCharacters[0] }.map { [$0] }
+        for tokenCharacter in tokenCharacters.dropFirst() {
+            var extended: [[Int]] = []
+            for path in paths {
+                guard let last = path.last, last + 1 < characters.count else { continue }
+                for position in (last + 1)..<characters.count where characters[position].folded == tokenCharacter {
+                    extended.append(path + [position])
+                }
+            }
+            paths = Array(extended.sorted { score($0) > score($1) }.prefix(128))
+            if paths.isEmpty { return nil }
+        }
+        guard let best = paths.max(by: { score($0) < score($1) }) else { return nil }
+        let indices = best.map { characters[$0].index }
+        return (score(best), highlightRanges(for: indices, in: text))
+    }
+
+    private static func matchTypo(_ text: String, token: String) -> (score: Int, ranges: [NSRange])? {
+        let tokenCharacters = token.map(folded)
+        guard tokenCharacters.count >= 3 else { return nil }
+        let maximumDistance = tokenCharacters.count < 8 ? 1 : tokenCharacters.count < 14 ? 2 : 3
+        var best: (score: Int, range: Range<String.Index>)?
+        for range in wordRanges(in: text) {
+            let candidate = text[range].map(folded)
+            guard abs(candidate.count - tokenCharacters.count) <= min(1, maximumDistance),
+                  let distance = editDistance(tokenCharacters, candidate, limit: maximumDistance),
+                  distance > 0 else { continue }
+            let score = 300 - distance * 35 - abs(candidate.count - tokenCharacters.count) * 10
+                + (range.lowerBound == text.startIndex ? 20 : 0)
+            if best == nil || score > best!.score { best = (score, range) }
+        }
+        guard let best else { return nil }
+        return (best.score, [NSRange(best.range, in: text)])
+    }
+
+    private static func wordRanges(in text: String) -> [Range<String.Index>] {
+        var result: [Range<String.Index>] = []
+        var start: String.Index?
+        for index in text.indices {
+            if text[index].isLetter || text[index].isNumber {
+                if start == nil { start = index }
+            } else if start != nil {
+                result.append(start!..<index)
+                start = nil
+            }
+        }
+        if let start { result.append(start..<text.endIndex) }
+        return result
+    }
+
+    private static func editDistance(_ lhs: [String], _ rhs: [String], limit: Int) -> Int? {
+        guard abs(lhs.count - rhs.count) <= limit else { return nil }
+        var distances = Array(repeating: Array(repeating: 0, count: rhs.count + 1), count: lhs.count + 1)
+        for index in 0...lhs.count { distances[index][0] = index }
+        for index in 0...rhs.count { distances[0][index] = index }
+        for left in 1...lhs.count {
+            for right in 1...rhs.count {
+                let substitution = distances[left - 1][right - 1] + (lhs[left - 1] == rhs[right - 1] ? 0 : 1)
+                distances[left][right] = min(distances[left - 1][right] + 1,
+                                             distances[left][right - 1] + 1,
+                                             substitution)
+                if left > 1, right > 1,
+                   lhs[left - 1] == rhs[right - 2], lhs[left - 2] == rhs[right - 1] {
+                    distances[left][right] = min(distances[left][right], distances[left - 2][right - 2] + 1)
+                }
+            }
+        }
+        let distance = distances[lhs.count][rhs.count]
+        return distance <= limit ? distance : nil
+    }
+
+    private static func highlightRanges(for indices: [String.Index], in text: String) -> [NSRange] {
+        var ranges: [Range<String.Index>] = []
+        for index in indices {
+            let range = index..<text.index(after: index)
+            if let last = ranges.last, last.upperBound == index {
+                ranges[ranges.count - 1] = last.lowerBound..<range.upperBound
+            } else {
+                ranges.append(range)
+            }
+        }
+        return ranges.map { NSRange($0, in: text) }
+    }
+
+    private static func folded(_ character: Character) -> String {
+        String(character).folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .lowercased()
+    }
+
+    private static func isWordStart(_ index: String.Index, in text: String) -> Bool {
+        guard index != text.startIndex else { return true }
+        let previous = text[text.index(before: index)]
+        return !previous.isLetter && !previous.isNumber
+            || previous.isLowercase && text[index].isUppercase
     }
 
     /// Matches an ASCII token against the toneless pinyin of Chinese characters, e.g. "weixin" or "weix" for 微信.

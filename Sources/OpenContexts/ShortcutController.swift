@@ -141,6 +141,7 @@ private struct ShortcutState {
 }
 
 @MainActor
+// pi-lens-ignore: type_body_length
 final class ShortcutController: ObservableObject {
     @Published private(set) var isRunning = false
     @Published private(set) var recordingTarget: ShortcutTarget?
@@ -332,6 +333,7 @@ final class ShortcutController: ObservableObject {
         event.characters(byApplyingModifiers: event.modifierFlags.intersection([.shift, .capsLock]))
     }
 
+    // pi-lens-ignore: cyclomatic_complexity
     private func keyAction(keyCode: UInt16, flags: CGEventFlags, characters: String? = nil,
                            isRepeat: Bool = false) -> SwitcherAction? {
         let shifted = flags.contains(.maskShift)
@@ -442,6 +444,7 @@ final class ShortcutController: ObservableObject {
         ]
     }
 
+    // pi-lens-ignore: cyclomatic_complexity, function_body_length
     static func selfCheck() -> Bool {
         var state = ShortcutState()
         guard KeyboardShortcut.allWindows.display == "⌘Tab",

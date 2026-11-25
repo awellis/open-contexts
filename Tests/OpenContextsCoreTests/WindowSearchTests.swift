@@ -44,19 +44,27 @@ final class WindowSearchTests: XCTestCase {
                        ["exact", "prefix", "contains", "internal"])
     }
 
-    func testRejectsAcronymsAndNonConsecutiveCharacters() {
+    func testSubsequenceMatchesAcronymsAndHighlightsMatchedCharacters() throws {
         let code = window("1", app: "Visual Studio Code", title: "")
-        XCTAssertNil(WindowSearch.match(code, query: "vsc"))
-        XCTAssertNil(WindowSearch.match(window("2", app: "OpenContexts", title: ""), query: "oc"))
+        let acronym = try XCTUnwrap(WindowSearch.match(code, query: "vsc"))
+        XCTAssertEqual(acronym.appRanges, [NSRange(location: 0, length: 1),
+                                           NSRange(location: 7, length: 1),
+                                           NSRange(location: 14, length: 1)])
+        let contexts = try XCTUnwrap(WindowSearch.match(
+            window("2", app: "OpenContexts", title: ""), query: "oc"
+        ))
+        XCTAssertEqual(contexts.appRanges, [NSRange(location: 0, length: 1),
+                                            NSRange(location: 4, length: 1)])
         XCTAssertNil(WindowSearch.match(code, query: "csv"))
     }
 
-    func testOpenMatchesOnlyContiguousTextInAppOrTitle() throws {
+    func testContiguousMatchesRankAheadOfScatteredMatches() throws {
         let windows = [window("scattered-app", app: "Outlook Preview Editor Notes", title: ""),
                        window("scattered-title", app: "Editor", title: "o p e n"),
                        window("app", app: "OpenContexts", title: ""),
                        window("title", app: "Editor", title: "ReOPEN project")]
-        XCTAssertEqual(WindowSearch.filter(windows, query: "open").map(\.window.id), ["app", "title"])
+        XCTAssertEqual(WindowSearch.filter(windows, query: "open").map(\.window.id),
+                       ["app", "title", "scattered-title", "scattered-app"])
         let appMatch = try XCTUnwrap(WindowSearch.match(windows[2], query: "open"))
         XCTAssertEqual(appMatch.appRanges, [NSRange(location: 0, length: 4)])
         let titleMatch = try XCTUnwrap(WindowSearch.match(windows[3], query: "open"))
@@ -105,9 +113,23 @@ final class WindowSearchTests: XCTestCase {
         XCTAssertNil(WindowSearch.match(window("5", app: "微 信", title: ""), query: "weixin"))
     }
 
-    func testNoResultsAndNoTypoCorrection() {
-        let windows = [window("1", app: "Chrome", title: "GitHub")]
+    func testExactSubsequenceAndTypoMatchesAreRankedInThatOrder() {
+        let windows = [window("typo", app: "VCS", title: ""),
+                       window("subsequence", app: "Visual Studio Code", title: ""),
+                       window("exact", app: "VSC", title: "")]
+        XCTAssertEqual(WindowSearch.filter(windows, query: "vsc").map(\.window.id),
+                       ["exact", "subsequence", "typo"])
+    }
+
+    func testTypoCorrectionHandlesTranspositionAndHighlightsTheWord() throws {
+        let windows = [window("chrome", app: "Google Chrome", title: "GitHub"),
+                       window("other", app: "Calendar", title: "Home")]
+        let matches = WindowSearch.filter(windows, query: "chorme")
+        XCTAssertEqual(matches.map(\.window.id), ["chrome"])
+        let match = try XCTUnwrap(matches.first)
+        XCTAssertEqual(match.appRanges, [NSRange(location: 7, length: 6)])
+        XCTAssertEqual(WindowSearch.filter(windows, query: "chxome").map(\.window.id), ["chrome"])
+        XCTAssertEqual(WindowSearch.filter(windows, query: "chrrome").map(\.window.id), ["chrome"])
         XCTAssertTrue(WindowSearch.filter(windows, query: "zzzz").isEmpty)
-        XCTAssertTrue(WindowSearch.filter(windows, query: "chorme").isEmpty)
     }
 }
