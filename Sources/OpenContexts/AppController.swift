@@ -45,6 +45,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         observeState()
         rebuildPanels()
         windowService.setIncludeAllSpaces(settings.showWindowsFromAllDesktops)
+        updateSidebarTracking()
         windowService.start()
         if !windowService.hasAccessibility { showSettings() }
     }
@@ -63,7 +64,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
                             groupMode: settings.groupModeShortcut,
                             switcherGroupsEnabled: settings.switcherGroupsEnabled)
         shortcuts.canBegin = { [weak self] currentAppOnly in
-            self?.availableWindows(currentAppOnly: currentAppOnly).isEmpty == false
+            guard let self else { return false }
+            if !self.availableWindows(currentAppOnly: currentAppOnly).isEmpty { return true }
+            // The event-tap callback must not wait for any Accessibility reads.
+            DispatchQueue.main.async { [weak self] in self?.windowService.refreshForPresentation() }
+            return false
         }
         shortcuts.onAction = { [weak self] action in self?.handle(action) }
         shortcuts.canDismissSidebar = { [weak self] in
@@ -129,6 +134,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
                                              switcherGroupsEnabled: self.settings.switcherGroupsEnabled)
                     self.windowService.setIncludeAllSpaces(self.settings.showWindowsFromAllDesktops)
                     if self.settings.sidebarShortcut == nil { self.dismissSidebar() }
+                    self.updateSidebarTracking()
                     self.settingsWindow?.title = L10n.text("OpenContexts Settings", language: self.settings.language)
                     if self.currentAppOnly != nil { self.refreshVisibleSwitcher() }
                 }
@@ -287,6 +293,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
             let expanded = !panel.isShortcutExpanded
             dismissSidebar()
             panel.setShortcutExpanded(expanded)
+            updateSidebarTracking()
         case .dismissSidebar:
             dismissSidebar()
         case .beginSearch:
@@ -358,6 +365,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         isSearchSession = searchSession
         if searchSession { startSearchDismissal() }
         showSwitchers()
+        windowService.refreshForPresentation()
     }
 
     private func startSearchDismissal() {
@@ -409,8 +417,13 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         updateSwitchers(resetHover: resetHover)
     }
 
+    private func updateSidebarTracking() {
+        windowService.setTrackSidebar(settings.sidebarMode != .hidden || sidebars.values.contains { $0.isShortcutExpanded })
+    }
+
     private func dismissSidebar() {
         sidebars.values.filter { $0.isShortcutExpanded }.forEach { $0.setShortcutExpanded(false) }
+        updateSidebarTracking()
     }
 
     private func selectSwitcherWindow(id: String) {
@@ -476,6 +489,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func finishSwitcher(activating id: String?) {
         stopSearchDismissal()
+        windowService.cancelPresentationRefresh()
         isSearchSession = false
         shortcuts.resetState()
         switchers.values.forEach { $0.hideSwitcher() }

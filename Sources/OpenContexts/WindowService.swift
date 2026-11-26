@@ -30,20 +30,20 @@ final class WindowService: ObservableObject {
         func cancel() { lock.withLock { cancelled = true } }
     }
 
-    private struct TrackedWindow: @unchecked Sendable {
+    struct TrackedWindow: @unchecked Sendable {
         let id: String
         let element: AXUIElement
         var info: WindowInfo
         var windowID: CGWindowID? = nil
     }
 
-    private struct ApplicationSnapshot: Sendable {
+    struct ApplicationSnapshot: Sendable {
         let processID: pid_t
         let appID: String
         let appName: String
     }
 
-    private struct ScanResult: @unchecked Sendable {
+    struct ScanResult: @unchecked Sendable {
         let windows: [TrackedWindow]
         let focusedID: String?
         let fullscreenScreenIDs: Set<UInt32>
@@ -51,15 +51,22 @@ final class WindowService: ObservableObject {
         let badgeReads: [String: DockBadgeRead]?
         var discoveries: [pid_t: WindowSpaces.DiscoveryState] = [:]
         var spaceSnapshot: WindowSpaces.Snapshot?
+        var pendingDiscoveryPID: pid_t?
     }
 
-    private enum AttributeRead<Value> {
+    private enum FocusRead: Sendable {
+        case known(String?)
+        case untracked
+        case failed
+    }
+
+    enum AttributeRead<Value> {
         case value(Value)
         case noValue
         case failure(AXError)
     }
 
-    private enum CapabilityProbe {
+    enum CapabilityProbe {
         case value(WindowTaskCapability)
         case invalidElement
     }
@@ -69,32 +76,167 @@ final class WindowService: ObservableObject {
     private var localWindows: [String: WeakWindow] = [:]
     private var externalFocusedID: String?
     private var timer: Timer?
+    private var focusTimer: Timer?
+    private var workspaceObservers: [NSObjectProtocol] = []
     private var scanInFlight = false
+    private var fullScanPending = false
+    private var pendingPIDs: Set<pid_t> = []
+    private var lastFullScanAt = -Double.infinity
+    private var focusReadInFlight = false
+    private var focusReadPending = false
+    private var focusRevision = 0
+    private var presentationTask: Task<Void, Never>?
+    private var lastUntrackedFocusScan: (pid: pid_t, at: TimeInterval)?
     private var activationTask: Task<Void, Never>?
     private var activationRequest: ActivationRequest?
     private var includeAllSpaces = false
+    private var trackSidebar = true
     private var discoveries: [pid_t: WindowSpaces.DiscoveryState] = [:]
-    private var discoveryPass = 0
+    private var discoveryTask: Task<Void, Never>?
     private var spaceSnapshot: WindowSpaces.Snapshot?
     private var lastBadgeScanAt = -Double.infinity
     private var badgeState = DockBadgeState()
     private let scanQueue = DispatchQueue(label: "OpenContexts.WindowScan", qos: .userInitiated)
+    private let focusQueue = DispatchQueue(label: "OpenContexts.WindowFocus", qos: .userInitiated)
+    private lazy var foregroundObserver = ForegroundWindowObserver(queue: focusQueue) { [weak self] inventoryChanged in
+        guard let self else { return }
+        if inventoryChanged, let pid = self.foregroundPID {
+            self.refreshApplication(pid)
+        } else {
+            self.refreshFocus()
+        }
+    }
 
     func start() {
         guard timer == nil else { return }
-        refresh()
+        observeWorkspace()
 
-        let timer = Timer(timeInterval: 0.4, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: 8, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
+        timer.tolerance = 1
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
+
+        // Only check trust or the focused window here, never enumerate every app.
+        let focusTimer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.timer != nil else { return }
+                self.refreshBadges()
+                if !self.hasAccessibility {
+                    if AXIsProcessTrusted() { self.refresh() }
+                } else if !self.foregroundObserver.reportsFocus {
+                    self.refreshFocus()
+                }
+            }
+        }
+        focusTimer.tolerance = 0.2
+        RunLoop.main.add(focusTimer, forMode: .common)
+        self.focusTimer = focusTimer
+        refresh()
     }
 
     func stop() {
         cancelActivation()
         timer?.invalidate()
         timer = nil
+        focusTimer?.invalidate()
+        focusTimer = nil
+        discoveryTask?.cancel()
+        discoveryTask = nil
+        cancelPresentationRefresh()
+        fullScanPending = false
+        pendingPIDs.removeAll()
+        focusReadPending = false
+        foregroundObserver.stop()
+        workspaceObservers.forEach(NSWorkspace.shared.notificationCenter.removeObserver)
+        workspaceObservers.removeAll()
+    }
+
+    private var foregroundPID: pid_t? {
+        guard let front = NSWorkspace.shared.frontmostApplication,
+              front.activationPolicy == .regular, front.processIdentifier != getpid() else { return nil }
+        return front.processIdentifier
+    }
+
+    private func observeWorkspace() {
+        let center = NSWorkspace.shared.notificationCenter
+        let names: [Notification.Name] = [NSWorkspace.didActivateApplicationNotification,
+            NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification,
+            NSWorkspace.didHideApplicationNotification, NSWorkspace.didUnhideApplicationNotification,
+            NSWorkspace.activeSpaceDidChangeNotification, NSWorkspace.didWakeNotification]
+        workspaceObservers = names.map { name in
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+                let pid = app?.processIdentifier
+                let regularApp = app?.activationPolicy == .regular
+                Task { @MainActor in
+                    guard let self, self.timer != nil else { return }
+                    switch name {
+                    case NSWorkspace.didActivateApplicationNotification:
+                        self.foregroundObserver.watch(self.hasAccessibility ? self.foregroundPID : nil)
+                        self.refreshFocus()
+                    case NSWorkspace.activeSpaceDidChangeNotification, NSWorkspace.didWakeNotification:
+                        self.refresh()
+                    default:
+                        if let pid, regularApp || self.tracked.contains(where: { $0.info.processID == pid }) {
+                            self.refreshApplication(pid)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func refreshFocus() {
+        guard timer != nil, hasAccessibility else { return }
+        guard !focusReadInFlight else { focusReadPending = true; return }
+        guard let pid = foregroundPID else {
+            focusRevision &+= 1
+            externalFocusedID = nil
+            publishWindows()
+            return
+        }
+        let candidates = tracked.filter { $0.info.processID == pid }
+        focusReadInFlight = true
+        focusQueue.async { [weak self] in
+            let app = AXUIElementCreateApplication(pid)
+            AXUIElementSetMessagingTimeout(app, 0.1)
+            let read: FocusRead
+            switch Self.readAttribute(kAXFocusedWindowAttribute, of: app) as AttributeRead<AXUIElement> {
+            case let .value(element):
+                read = candidates.first { CFEqual($0.element, element) }.map { .known($0.id) } ?? .untracked
+            case .noValue:
+                read = .known(nil)
+            case .failure:
+                read = .failed
+            }
+            Task { @MainActor [weak self] in self?.applyFocus(read, pid: pid) }
+        }
+    }
+
+    private func applyFocus(_ read: FocusRead, pid: pid_t) {
+        focusReadInFlight = false
+        let recheck = focusReadPending
+        focusReadPending = false
+        guard timer != nil, hasAccessibility else { return }
+        defer { if recheck { refreshFocus() } }
+        guard foregroundPID == pid else { return }
+        switch read {
+        case let .known(id):
+            focusRevision &+= 1
+            guard id == nil || tracked.contains(where: { $0.id == id }) else { return }
+            guard externalFocusedID != id else { return }
+            externalFocusedID = id
+            publishWindows()
+        case .untracked:
+            let now = ProcessInfo.processInfo.systemUptime
+            if let last = lastUntrackedFocusScan, last.pid == pid, now - last.at < 2 { return }
+            lastUntrackedFocusScan = (pid, now)
+            refreshApplication(pid)
+        case .failed:
+            break
+        }
     }
 
     func requestAccessibility() {
@@ -104,11 +246,41 @@ final class WindowService: ObservableObject {
     }
 
     func refresh() {
+        fullScanPending = true
+        drainScans()
+    }
+
+    private func refreshApplication(_ pid: pid_t) {
+        pendingPIDs.insert(pid)
+        drainScans()
+    }
+
+    func refreshForPresentation() {
+        // Present from cache. A quick tap should not queue a scan ahead of activation.
+        guard presentationTask == nil, ProcessInfo.processInfo.systemUptime - lastFullScanAt >= 2 else { return }
+        presentationTask = Task { @MainActor [weak self] in
+            do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
+            guard let self else { return }
+            self.presentationTask = nil
+            if ProcessInfo.processInfo.systemUptime - self.lastFullScanAt >= 2 { self.refresh() }
+        }
+    }
+
+    func cancelPresentationRefresh() {
+        presentationTask?.cancel()
+        presentationTask = nil
+    }
+
+    private func drainScans() {
+        guard !scanInFlight, fullScanPending || !pendingPIDs.isEmpty else { return }
+        let selectedPIDs = fullScanPending ? nil : pendingPIDs
+        fullScanPending = false
+        pendingPIDs.removeAll()
         guard updateTrust() else { return }
-        guard !scanInFlight else { return }
 
         let ownPID = ProcessInfo.processInfo.processIdentifier
-        let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let frontmostPID = foregroundPID
+        if timer != nil { foregroundObserver.watch(frontmostPID) }
         let applications = NSWorkspace.shared.runningApplications.compactMap { application -> ApplicationSnapshot? in
             guard application.activationPolicy == .regular, application.processIdentifier != ownPID else { return nil }
             let appID = application.bundleIdentifier
@@ -120,31 +292,68 @@ final class WindowService: ObservableObject {
                 appName: application.localizedName ?? appID
             )
         }
-        let now = ProcessInfo.processInfo.systemUptime
-        let scanBadges = now - lastBadgeScanAt >= 2
-        if scanBadges { lastBadgeScanAt = now }
-        let dockPID = scanBadges
-            ? NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first?.processIdentifier
-            : nil
+        if selectedPIDs == nil { lastFullScanAt = ProcessInfo.processInfo.systemUptime }
+        let scanSidebar = trackSidebar
         let previous = tracked
         let allSpaces = includeAllSpaces
         let discoveryState = discoveries
-        let pass = discoveryPass
-        discoveryPass &+= 1
+        let focusRevision = focusRevision
+        let wasRunning = timer != nil
         scanInFlight = true
         scanQueue.async { [weak self] in
             let result = Self.scan(applications: applications, previous: previous,
-                                   frontmostPID: frontmostPID,
-                                   badgeReads: scanBadges ? dockPID.flatMap(Self.scanDockBadges) : nil,
-                                   allSpaces: allSpaces, discoveries: discoveryState, discoveryPass: pass)
-            Task { @MainActor [weak self] in self?.apply(result) }
+                                   frontmostPID: frontmostPID, badgeReads: nil,
+                                   allSpaces: allSpaces, discoveries: discoveryState,
+                                   selectedPIDs: selectedPIDs, scanSidebar: scanSidebar)
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if wasRunning && self.timer == nil { self.scanInFlight = false; return }
+                // A foreground notification can arrive while inventory is being read.
+                let focusIsCurrent = self.foregroundPID == frontmostPID && self.focusRevision == focusRevision
+                let currentFocus = focusIsCurrent ? result.focusedID : self.externalFocusedID
+                self.apply(result, focusedID: currentFocus)
+            }
         }
     }
 
     func setIncludeAllSpaces(_ enabled: Bool) {
         guard includeAllSpaces != enabled else { return }
         includeAllSpaces = enabled
-        refresh()
+        if !enabled {
+            discoveryTask?.cancel()
+            discoveryTask = nil
+        }
+        if timer != nil { refresh() }
+    }
+
+    func setTrackSidebar(_ enabled: Bool) {
+        guard trackSidebar != enabled else { return }
+        trackSidebar = enabled
+        if enabled {
+            lastBadgeScanAt = -.infinity
+            if timer != nil {
+                refreshBadges()
+                refresh()
+            }
+        } else if !fullscreenScreenIDs.isEmpty {
+            fullscreenScreenIDs = []
+        }
+    }
+
+    private func refreshBadges() {
+        let now = ProcessInfo.processInfo.systemUptime
+        guard trackSidebar, hasAccessibility, !scanInFlight, now - lastBadgeScanAt >= 2,
+              let dock = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first else { return }
+        lastBadgeScanAt = now
+        let pid = dock.processIdentifier
+        scanQueue.async { [weak self] in
+            guard let reads = Self.scanDockBadges(processID: pid) else { return }
+            Task { @MainActor [weak self] in
+                guard let self, self.trackSidebar, self.hasAccessibility else { return }
+                self.badgeState.merge(activeAppIDs: Set(self.tracked.map(\.info.appID)), reads: reads)
+                if self.appBadges != self.badgeState.badges { self.appBadges = self.badgeState.badges }
+            }
+        }
     }
 
     /// Publishes the current trust state and clears external windows when it is missing.
@@ -153,6 +362,10 @@ final class WindowService: ObservableObject {
         if hasAccessibility != trusted { hasAccessibility = trusted }
         guard !trusted else { return true }
         tracked = []
+        discoveries.removeAll()
+        discoveryTask?.cancel()
+        discoveryTask = nil
+        foregroundObserver.stop()
         externalFocusedID = nil
         if !fullscreenScreenIDs.isEmpty { fullscreenScreenIDs = [] }
         publishWindows()
@@ -160,6 +373,10 @@ final class WindowService: ObservableObject {
     }
 
     private func apply(_ result: ScanResult) {
+        apply(result, focusedID: result.focusedID)
+    }
+
+    private func apply(_ result: ScanResult, focusedID: String?) {
         scanInFlight = false
         guard updateTrust() else { return }
 
@@ -167,7 +384,7 @@ final class WindowService: ObservableObject {
         var orderedIDs = tracked.map(\.id).filter(discoveredIDs.contains)
         orderedIDs.append(contentsOf: result.windows.map(\.id).filter { !orderedIDs.contains($0) })
 
-        externalFocusedID = result.focusedID
+        externalFocusedID = focusedID.flatMap { discoveredIDs.contains($0) ? $0 : nil }
         discoveries = result.discoveries
         spaceSnapshot = result.spaceSnapshot
         if let externalFocusedID, let index = orderedIDs.firstIndex(of: externalFocusedID), index != 0 {
@@ -177,11 +394,22 @@ final class WindowService: ObservableObject {
 
         let byID = Dictionary(uniqueKeysWithValues: result.windows.map { ($0.id, $0) })
         tracked = orderedIDs.compactMap { byID[$0] }
-        if fullscreenScreenIDs != result.fullscreenScreenIDs { fullscreenScreenIDs = result.fullscreenScreenIDs }
-        badgeState.merge(activeAppIDs: result.activeAppIDs, reads: result.badgeReads)
-        if appBadges != badgeState.badges { appBadges = badgeState.badges }
+        if trackSidebar {
+            if fullscreenScreenIDs != result.fullscreenScreenIDs { fullscreenScreenIDs = result.fullscreenScreenIDs }
+            badgeState.merge(activeAppIDs: result.activeAppIDs, reads: result.badgeReads)
+            if appBadges != badgeState.badges { appBadges = badgeState.badges }
+        }
         hasCompletedInitialScan = true
         publishWindows()
+        if discoveryTask == nil, timer != nil, includeAllSpaces, let pid = result.pendingDiscoveryPID {
+            discoveryTask = Task { @MainActor [weak self] in
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                guard let self else { return }
+                self.discoveryTask = nil
+                self.refreshApplication(pid)
+            }
+        }
+        drainScans()
     }
 
     func activate(_ id: String) {
@@ -249,7 +477,7 @@ final class WindowService: ObservableObject {
                     await self.raise(window, request: request)
                 }
             }
-            self.refresh()
+            self.refreshApplication(window.info.processID)
         }
     }
 
@@ -306,7 +534,7 @@ final class WindowService: ObservableObject {
             if result != .success {
                 self?.logger.error("Failed to close window \(id, privacy: .public): AX error \(result.rawValue)")
             }
-            Task { @MainActor [weak self] in self?.refresh() }
+            Task { @MainActor [weak self] in self?.refreshApplication(window.info.processID) }
         }
     }
 
@@ -454,7 +682,7 @@ final class WindowService: ObservableObject {
         for pass in 0..<30 {
             let result = scan(applications: applications, previous: previous,
                               frontmostPID: NSWorkspace.shared.frontmostApplication?.processIdentifier,
-                              badgeReads: nil, allSpaces: true, discoveries: discoveryState, discoveryPass: pass)
+                              badgeReads: nil, allSpaces: true, discoveries: discoveryState, now: Double(pass))
             previous = result.windows
             discoveryState = result.discoveries
         }
@@ -486,10 +714,11 @@ final class WindowService: ObservableObject {
     static func activationSelfCheck(appID: String, simulateRestoration: Bool, simulateCancellation: Bool = false) async -> Bool {
         guard AXIsProcessTrusted(), let app = NSRunningApplication.runningApplications(withBundleIdentifier: appID).first else { return false }
         let apps = [ApplicationSnapshot(processID: app.processIdentifier, appID: appID, appName: appID)]
-        var result = scan(applications: apps, previous: [], frontmostPID: nil, badgeReads: nil, allSpaces: true)
+        let startTime = ProcessInfo.processInfo.systemUptime
+        var result = scan(applications: apps, previous: [], frontmostPID: nil, badgeReads: nil, allSpaces: true, now: startTime)
         for pass in 1..<30 where result.windows.isEmpty {
             result = scan(applications: apps, previous: result.windows, frontmostPID: nil,
-                          badgeReads: nil, allSpaces: true, discoveries: result.discoveries, discoveryPass: pass)
+                          badgeReads: nil, allSpaces: true, discoveries: result.discoveries, now: startTime + Double(pass))
         }
         guard (simulateCancellation ? result.windows.count >= 2 : result.windows.count == 1), var target = result.windows.first else {
             print("Activation check requires \(simulateCancellation ? "two or more" : "exactly one") eligible windows; found \(result.windows.count)")
@@ -595,219 +824,6 @@ final class WindowService: ObservableObject {
         if windows != published { windows = published }
     }
 
-    nonisolated private static func scan(
-        applications: [ApplicationSnapshot],
-        previous: [TrackedWindow],
-        frontmostPID: pid_t?,
-        badgeReads: [String: DockBadgeRead]?,
-        allSpaces: Bool = false, discoveries: [pid_t: WindowSpaces.DiscoveryState] = [:], discoveryPass: Int = 0
-    ) -> ScanResult {
-        var discovered: [TrackedWindow] = []
-        var focusedElement: AXUIElement?
-        var usedIDs: Set<String> = []
-        let topology = WindowSpaces.query()
-        var discoveryState = discoveries.filter { pid, _ in applications.contains { $0.processID == pid } }
-        for pid in Array(discoveryState.keys) {
-            guard var state = discoveryState[pid] else { continue }
-            state.windows = state.windows.filter { id, _ in topology?.owners[id] == pid }
-            discoveryState[pid] = state
-        }
-        let knownIDs = Set(previous.compactMap(\.windowID)).union(discoveryState.values.flatMap { $0.windows.keys })
-        let missingOwners = Set(topology?.owners.compactMap { id, pid in
-            !knownIDs.contains(id) && topology?.space(for: id)?.isCurrent == false ? pid : nil
-        } ?? [])
-        let pendingPIDs = applications.map(\.processID).filter { missingOwners.contains($0) }
-        let discoveryPID = allSpaces && !pendingPIDs.isEmpty ? pendingPIDs[discoveryPass % pendingPIDs.count] : nil
-
-        for application in applications {
-            let appElement = AXUIElementCreateApplication(application.processID)
-            AXUIElementSetMessagingTimeout(appElement, 0.2)
-            let appWindowsRead: AttributeRead<[AXUIElement]> = readAttribute(kAXWindowsAttribute, of: appElement)
-            var appWindows: [AXUIElement]
-            switch appWindowsRead {
-            case let .value(windows):
-                appWindows = windows
-            case .failure(.invalidUIElement):
-                appWindows = []
-            case .noValue, .failure:
-                discovered.append(contentsOf: previous.filter { $0.info.processID == application.processID }.map {
-                    var cached = $0
-                    cached.info.space = topology?.space(for: cached.windowID) ?? cached.info.space
-                    return cached
-                })
-                usedIDs.formUnion(previous.lazy.filter { $0.info.processID == application.processID }.map(\.id))
-                continue
-            }
-            if application.processID == frontmostPID {
-                focusedElement = attribute(kAXFocusedWindowAttribute, of: appElement)
-            }
-
-            for key in [kAXFocusedWindowAttribute, kAXMainWindowAttribute] {
-                if let window: AXUIElement = attribute(key, of: appElement),
-                   !appWindows.contains(where: { CFEqual($0, window) }) { appWindows.append(window) }
-            }
-            for window in previous where window.info.processID == application.processID {
-                guard let id = window.windowID,
-                      topology?.membership[id] != nil,
-                      !appWindows.contains(where: { CFEqual($0, window.element) }) else { continue }
-                appWindows.append(window.element)
-            }
-            if application.processID == discoveryPID, let topology {
-                let publishedIDs = Set(appWindows.compactMap(WindowSpaces.windowID))
-                let targets = Set(topology.owners.compactMap { id, pid in
-                    pid == application.processID && !publishedIDs.contains(id)
-                        && topology.space(for: id)?.isCurrent == false ? id : nil
-                })
-                var state = discoveryState[application.processID, default: WindowSpaces.DiscoveryState()]
-                _ = WindowSpaces.discoverWindows(pid: application.processID, targets: targets, state: &state)
-                discoveryState[application.processID] = state
-            }
-            for element in discoveryState[application.processID]?.windows.values ?? Dictionary<CGWindowID, AXUIElement>().values {
-                if !appWindows.contains(where: { CFEqual($0, element) }) { appWindows.append(element) }
-            }
-
-            for element in appWindows {
-                AXUIElementSetMessagingTimeout(element, 0.2)
-                guard !discovered.contains(where: { CFEqual($0.element, element) }) else { continue }
-
-                // ponytail: linear identity matching is simpler and fast for desktop-sized window lists.
-                let existing = previous.first { !usedIDs.contains($0.id) && CFEqual($0.element, element) }
-                let roleState: WindowCandidateState
-                let roleRead: AttributeRead<String> = readAttribute(kAXRoleAttribute, of: element)
-                switch roleRead {
-                case let .value(role):
-                    if role == kAXWindowRole {
-                        let subroleRead: AttributeRead<String> = readAttribute(kAXSubroleAttribute, of: element)
-                        switch subroleRead {
-                        case let .value(subrole): roleState = .attributes(role: role, subrole: subrole)
-                        case .noValue: roleState = .attributes(role: role, subrole: nil)
-                        case let .failure(error):
-                            roleState = error == .invalidUIElement ? .notListed : .attributeReadFailed
-                        }
-                    } else {
-                        roleState = .attributes(role: role, subrole: nil)
-                    }
-                case .noValue:
-                    roleState = .missingRole
-                case let .failure(error):
-                    roleState = error == .invalidUIElement ? .notListed : .attributeReadFailed
-                    if error == .invalidUIElement, var state = discoveryState[application.processID] {
-                        state.windows = state.windows.filter { !CFEqual($0.value, element) }
-                        discoveryState[application.processID] = state
-                    }
-                }
-
-                let title: String
-                let titleRead: AttributeRead<String> = readAttribute(kAXTitleAttribute, of: element)
-                switch titleRead {
-                case let .value(value):
-                    title = value
-                case .noValue:
-                    title = ""
-                case .failure(.invalidUIElement):
-                    continue
-                case .failure:
-                    guard let existing else { continue }
-                    title = existing.info.title
-                }
-
-                let document: String?
-                let documentRead: AttributeRead<String> = readAttribute(kAXDocumentAttribute, of: element)
-                switch documentRead {
-                case let .value(value):
-                    document = value
-                case .failure(.invalidUIElement):
-                    continue
-                case .failure:
-                    guard let existing else { continue }
-                    document = existing.info.documentURL
-                case .noValue:
-                    let urlRead: AttributeRead<URL> = readAttribute(kAXURLAttribute, of: element)
-                    switch urlRead {
-                    case let .value(value):
-                        document = value.absoluteString
-                    case .noValue:
-                        document = nil
-                    case .failure(.invalidUIElement):
-                        continue
-                    case .failure:
-                        guard let existing else { continue }
-                        document = existing.info.documentURL
-                    }
-                }
-
-                let hasTitle = !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                let hasDocument = document?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-                let isModal: Bool
-                let modalStatusUnknown: Bool
-                let modalRead: AttributeRead<Bool> = readAttribute(kAXModalAttribute, of: element)
-                switch modalRead {
-                case let .value(value):
-                    isModal = value
-                    modalStatusUnknown = false
-                case .noValue:
-                    isModal = false
-                    modalStatusUnknown = roleState == .attributes(role: "AXWindow", subrole: "AXDialog")
-                        || roleState == .attributes(role: "AXWindow", subrole: "AXSystemDialog")
-                case .failure(.invalidUIElement):
-                    continue
-                case .failure:
-                    isModal = false
-                    modalStatusUnknown = true
-                }
-
-                let taskCapability: WindowTaskCapability
-                switch probeTaskCapability(of: element) {
-                case let .value(value):
-                    taskCapability = modalStatusUnknown && value == .unsupported ? .readFailed : value
-                case .invalidElement:
-                    continue
-                }
-
-                guard WindowEligibilityPolicy.shouldInclude(
-                    roleState,
-                    hasTitle: hasTitle,
-                    hasDocument: hasDocument,
-                    isModal: isModal,
-                    modalStatusUnknown: modalStatusUnknown,
-                    taskCapability: taskCapability,
-                    previouslyTracked: existing != nil
-                ) else { continue }
-
-                let id = existing?.id ?? UUID().uuidString
-                let windowID = existing?.windowID ?? WindowSpaces.windowID(of: element)
-                usedIDs.insert(id)
-                discovered.append(TrackedWindow(
-                    id: id,
-                    element: element,
-                    info: WindowInfo(
-                        id: id,
-                        appID: application.appID,
-                        appName: application.appName,
-                        title: title,
-                        documentURL: document,
-                        processID: application.processID,
-                        space: topology?.space(for: windowID)
-                    ),
-                    windowID: windowID
-                ))
-            }
-        }
-
-        let focusedID = focusedElement.flatMap { focused in
-            discovered.first { CFEqual($0.element, focused) }?.id
-        }
-        return ScanResult(
-            windows: discovered,
-            focusedID: focusedID,
-            fullscreenScreenIDs: fullscreenDisplays(in: discovered),
-            activeAppIDs: Set(applications.map(\.appID)),
-            badgeReads: badgeReads,
-            discoveries: discoveryState,
-            spaceSnapshot: topology
-        )
-    }
-
     nonisolated private static func scanDockBadges(processID: pid_t) -> [String: DockBadgeRead]? {
         let dock = AXUIElementCreateApplication(processID)
         AXUIElementSetMessagingTimeout(dock, 0.15)
@@ -839,13 +855,13 @@ final class WindowService: ObservableObject {
         return reads
     }
 
-    nonisolated private static func attribute<T>(_ name: String, of element: AXUIElement) -> T? {
+    nonisolated static func attribute<T>(_ name: String, of element: AXUIElement) -> T? {
         let read: AttributeRead<T> = readAttribute(name, of: element)
         guard case let .value(value) = read else { return nil }
         return value
     }
 
-    nonisolated private static func readAttribute<T>(_ name: String, of element: AXUIElement) -> AttributeRead<T> {
+    nonisolated static func readAttribute<T>(_ name: String, of element: AXUIElement) -> AttributeRead<T> {
         var value: CFTypeRef?
         let result = AXUIElementCopyAttributeValue(element, name as CFString, &value)
         if result == .attributeUnsupported || result == .noValue { return .noValue }
@@ -860,7 +876,7 @@ final class WindowService: ObservableObject {
         return (value as? Bool) ?? (value as? NSNumber)?.boolValue ?? false
     }
 
-    nonisolated private static func probeTaskCapability(of element: AXUIElement) -> CapabilityProbe {
+    nonisolated static func probeTaskCapability(of element: AXUIElement) -> CapabilityProbe {
         var readFailed = false
         for attributeName in [kAXMainAttribute, kAXMinimizedAttribute] {
             var settable = DarwinBoolean(false)
@@ -899,7 +915,7 @@ final class WindowService: ObservableObject {
         return false
     }
 
-    nonisolated private static func fullscreenDisplays(in windows: [TrackedWindow],
+    nonisolated static func fullscreenDisplays(in windows: [TrackedWindow],
         isFullscreen: (AXUIElement) -> Bool = { boolAttribute("AXFullScreen", of: $0) }) -> Set<UInt32> {
         var count: UInt32 = 0
         guard CGGetActiveDisplayList(0, nil, &count) == .success else { return [] }

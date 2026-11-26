@@ -8,6 +8,25 @@ enum WindowSpaces {
         var cursor: UInt64 = 0
         var unresolved: Set<CGWindowID> = []
         var windows: [CGWindowID: AXUIElement] = [:]
+        var retry = DiscoveryRetry()
+
+        mutating func deferAttempt(for targets: Set<CGWindowID>, now: TimeInterval) {
+            let newTargets = !targets.isSubset(of: unresolved)
+            if newTargets { cursor = 0 }
+            unresolved = targets
+            retry.attempted(at: now, madeProgress: false, hasNewTargets: newTargets)
+        }
+    }
+
+    struct DiscoveryRetry {
+        private(set) var nextAttempt = -Double.infinity
+        private var delay: TimeInterval = 1
+
+        mutating func attempted(at now: TimeInterval, madeProgress: Bool, hasNewTargets: Bool) {
+            if madeProgress || hasNewTargets { delay = 1 }
+            nextAttempt = now + delay
+            delay = min(delay * 2, 60)
+        }
     }
 
     struct Snapshot: Sendable {
@@ -18,6 +37,14 @@ enum WindowSpaces {
         func space(for windowID: CGWindowID?) -> WindowSpace? {
             guard let windowID, let spaces = membership[windowID] else { return nil }
             return spaces.first(where: \.isCurrent) ?? spaces.first
+        }
+
+        func discoveryTargets(eligiblePIDs: Set<pid_t>, knownIDs: Set<CGWindowID>) -> [pid_t: Set<CGWindowID>] {
+            var targets: [pid_t: Set<CGWindowID>] = [:]
+            for (id, pid) in owners where eligiblePIDs.contains(pid) && !knownIDs.contains(id) && space(for: id)?.isCurrent == false {
+                targets[pid, default: []].insert(id)
+            }
+            return targets
         }
     }
 
@@ -81,6 +108,44 @@ enum WindowSpaces {
             owners[id.uint32Value] = pid
         }
         return Snapshot(spaces: spaces, membership: membership, owners: owners)
+    }
+
+    /// Give untried targets priority, then try the most overdue app. One bounded batch per tick.
+    static func nextDiscovery(in targets: [pid_t: Set<CGWindowID>], states: [pid_t: DiscoveryState],
+                              now: TimeInterval) -> (pid: pid_t, targets: Set<CGWindowID>)? {
+        targets.compactMap { pid, ids -> (pid: pid_t, targets: Set<CGWindowID>, due: TimeInterval)? in
+            let state = states[pid, default: DiscoveryState()]
+            let remaining = ids.subtracting(state.windows.keys)
+            guard !remaining.isEmpty else { return nil }
+            let due = remaining.isSubset(of: state.unresolved) ? state.retry.nextAttempt : -.infinity
+            return due <= now ? (pid, remaining, due) : nil
+        }.min { ($0.due, $0.pid) < ($1.due, $1.pid) }.map { ($0.pid, $0.targets) }
+    }
+
+    static func discoveryRetrySelfCheck() -> Bool {
+        let pid: pid_t = 42
+        let targets: [pid_t: Set<CGWindowID>] = [pid: [1]]
+        var state = DiscoveryState()
+        guard nextDiscovery(in: targets, states: [:], now: 0)?.pid == pid else { return false }
+        state.deferAttempt(for: [1], now: 0)
+        guard nextDiscovery(in: targets, states: [pid: state], now: 0.9) == nil,
+              nextDiscovery(in: targets, states: [pid: state], now: 1)?.pid == pid else { return false }
+        state.deferAttempt(for: [1], now: 1)
+        guard nextDiscovery(in: targets, states: [pid: state], now: 2.9) == nil,
+              nextDiscovery(in: [pid: [1, 2]], states: [pid: state], now: 2)?.targets == [1, 2],
+              nextDiscovery(in: [11: [3], pid: [1]], states: [pid: state], now: 3)?.pid == 11 else { return false }
+        for now in stride(from: 10.0, through: 510.0, by: 100) { state.deferAttempt(for: [1], now: now) }
+        guard state.retry.nextAttempt == 570 else { return false }
+        state.retry.attempted(at: 571, madeProgress: true, hasNewTargets: false)
+        return state.retry.nextAttempt == 572
+    }
+
+    static func probe(pid: pid_t, targets: Set<CGWindowID>, state: inout DiscoveryState, now: TimeInterval) {
+        let newTargets = !targets.isSubset(of: state.unresolved)
+        let before = state.windows.count
+        _ = discoverWindows(pid: pid, targets: targets, state: &state)
+        let found = state.windows.count > before
+        state.retry.attempted(at: now, madeProgress: found, hasNewTargets: newTargets)
     }
 
     static func discoverWindows(pid: pid_t, targets: Set<CGWindowID>, state: inout DiscoveryState) -> [AXUIElement] {
