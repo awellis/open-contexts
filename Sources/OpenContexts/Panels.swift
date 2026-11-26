@@ -1215,6 +1215,7 @@ final class SwitcherPanel: NSPanel {
         searchIcon.image = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil)
         searchIcon.contentTintColor = .secondaryLabelColor
         queryLabel.font = .systemFont(ofSize: 13)
+        queryLabel.textColor = .labelColor
         queryLabel.lineBreakMode = .byTruncatingTail
         queryLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         searchCaret.isHidden = true
@@ -1346,8 +1347,7 @@ final class SwitcherPanel: NSPanel {
         }
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let groupChanged = updateGroupBar(scope, language: language)
-        queryLabel.stringValue = query.isEmpty ? L10n.text("Type an app name or window title", language: language) : query
-        queryLabel.textColor = query.isEmpty ? .secondaryLabelColor : .labelColor
+        queryLabel.stringValue = query
         queryLabel.setAccessibilityLabel(L10n.text("Window search", language: language))
         updateSearchCaret(focused: searchFocused, empty: query.isEmpty)
         countLabel.stringValue = L10n.format(query.isEmpty ? "%@ windows" : "%@ results",
@@ -2810,15 +2810,16 @@ enum PanelSmokeCheck {
         let initialIndex = switcherWindows.count - 1
         switcher.show(results: switcherResults, selectedIndex: initialIndex)
         switcher.contentView?.layoutSubtreeIfNeeded()
-        guard !switcher.smokeSearchCaret.visible, !switcher.smokeSearchCaret.blinking else {
+        guard switcher.smokeSearchHeader.query.isEmpty,
+              !switcher.smokeSearchCaret.visible, !switcher.smokeSearchCaret.blinking else {
             switcher.close()
             sidebar.close()
-            return fail("search caret must default to hidden")
+            return fail("switcher must open with a blank query and hidden caret")
         }
         switcher.show(results: switcherResults, selectedIndex: initialIndex, searchFocused: true)
         switcher.contentView?.layoutSubtreeIfNeeded()
         let emptyCaret = switcher.smokeSearchCaret
-        guard emptyCaret.visible, emptyCaret.blinking,
+        guard switcher.smokeSearchHeader.query.isEmpty, emptyCaret.visible, emptyCaret.blinking,
               abs(emptyCaret.frame.width - 2) < 0.5, abs(emptyCaret.frame.height - 16) < 0.5,
               abs(emptyCaret.frame.minX - emptyCaret.queryAlignmentRect.minX) < 0.5 else {
             switcher.close()
@@ -2878,7 +2879,7 @@ enum PanelSmokeCheck {
             && !switcher.smokeSearchHeader.hasSelection
         switcher.update(results: switcherResults, selectedIndex: initialIndex, language: .en)
         switcher.update(results: switcherResults, selectedIndex: initialIndex, query: " \t ", language: .en)
-        let cleared = switcher.smokeSearchHeader.query == "Type an app name or window title"
+        let cleared = switcher.smokeSearchHeader.query.isEmpty
             && switcher.smokeSearchHeader.count == "200 windows" && !switcher.smokeSearchHeader.empty
             && switcher.smokeLayoutIsValid && switcher.smokeHighlightedIndices == [initialIndex]
         let valid = initial && still && moved && mouseSelected && keyboardSelected
