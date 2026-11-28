@@ -17,6 +17,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private var sidebars: [CGDirectDisplayID: SidebarPanel] = [:]
     private var switchers: [CGDirectDisplayID: SwitcherPanel] = [:]
+    private let switcherIconCache = SwitcherIconCache()
     private var cancellables: Set<AnyCancellable> = []
     private var settingsWindow: NSWindow?
     private var statusItem: NSStatusItem?
@@ -79,6 +80,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func observeState() {
         windowService.$windows.sink { [weak self] windows in
             guard let self else { return }
+            self.switcherIconCache.retainIcons(for: windows)
             if self.windowService.hasCompletedInitialScan && !self.didRestoreGroups {
                 self.didRestoreGroups = true
                 self.groupStore.reconcile(windows)
@@ -173,7 +175,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 onDeleteGroup: { [weak self] in self?.groupStore.deleteGroup(id: $0) }
             )
             switchers[id] = SwitcherPanel(
-                screen: screen,
+                screen: screen, iconCache: switcherIconCache,
                 onActivate: { [weak self] id in self?.finishSwitcher(activating: id) },
                 onSelect: { [weak self] id in self?.selectSwitcherWindow(id: id) },
                 onSelectGroup: { [weak self] id in self?.changeSwitcherGroup(to: id) },
@@ -304,7 +306,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
             guard !switchingResults.isEmpty else { return }
             selectedIndex = (selectedIndex + amount % switchingResults.count + switchingResults.count)
                 % switchingResults.count
-            updateSwitchers(resetHover: true)
+            updateSwitcherSelection(resetHover: true)
         case let .groupArrow(direction, shifted):
             if let switchingGroupID {
                 if shifted {
@@ -431,7 +433,13 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
               let index = switchingResults.firstIndex(where: { $0.window.id == id }),
               index != selectedIndex else { return }
         selectedIndex = index
-        updateSwitchers()
+        updateSwitcherSelection()
+    }
+
+    private func updateSwitcherSelection(resetHover: Bool = false) {
+        for panel in switchers.values where panel.isVisible {
+            panel.selectRow(at: selectedIndex, resetHover: resetHover)
+        }
     }
 
     private func switcherTargetDisplayIDs() -> Set<CGDirectDisplayID> {
